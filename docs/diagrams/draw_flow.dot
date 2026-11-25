@@ -1,0 +1,27 @@
+digraph G {
+  rankdir=TB; nodesep=0.4; ranksep=0.45;
+  node [shape=box style="rounded,filled" fontname="Helvetica" fontsize=11 fillcolor=white];
+  edge [fontname="Helvetica" fontsize=9];
+  ui [label="personality_signature.html (browser)\nbutton click → fetch() POST" fillcolor="#dbe8fb"];
+  br [label="gui_bridge_server.py\nHTTP server 127.0.0.1:8787\ndo_POST → job_id → worker thread" fillcolor="#fde3c8"];
+  seq [label="run_signature_sequence.py\npen_up → draw → pen_down → brush → grab\nstops on any failure" fillcolor="#fde3c8"];
+  es [label="emergency_stop.py\nPOST /estop\nstop command + kill process group" fillcolor="#f6d0d0"];
+  gh [label="go_home.py\nPOST /go-home\nrefused while a job runs" fillcolor="#f6d0d0"];
+  drl [label="run_drl_motion.py\npen_up / pen_down / brush / grab" fillcolor="#dcefd9"];
+  ltp [label="lower_to_paper.py\ndrawing step" fillcolor="#dcefd9"];
+  m [label="drl_motions.py\ndigital outputs (grasp / release)\nmovej / movel sequences" fillcolor="#e8f4e4"];
+  subgraph cluster_p {label="drawing pipeline (same process)"; style=dashed; fontname="Helvetica";
+    p1 [label="① svg_parser\nSVG → strokes"]; p2 [label="② bezier_sampler\ncurves → polylines"];
+    p3 [label="③ coordinate_mapper\nscale + offset"]; p4 [label="④ trajectory_planner\nstroke order (nearest neighbor)"];
+    p5 [label="⑤ robot_controller\nmovel + force control\nblend radius 0 at stroke end" fillcolor="#fde3c8"];
+    p1->p2->p3->p4->p5; {rank=same; p1;p2;p3;p4;p5} }
+  sdk [label="DR_init / DSR_ROBOT2 / DR_common2 — Doosan robot SDK" shape=box style=filled fillcolor="#eeeeee" width=9];
+  ui -> br [xlabel="1) click → POST " color=red fontcolor=red penwidth=2];
+  br -> ui [xlabel=" 8) GET /status polling" color=red fontcolor=red penwidth=2];
+  br -> seq [label="2) start job" color=red fontcolor=red penwidth=2];
+  br -> es [label="subprocess"]; br -> gh [label="subprocess"];
+  seq -> drl [label="3,5,6,7) pen_up, pen_down, brush, grab\n(run one by one)" color=red fontcolor=red penwidth=2];
+  seq -> ltp [label="4) draw (runs ①–⑤ in order)" color=red fontcolor=red penwidth=2];
+  drl -> m [label="import"]; ltp -> p1 [label="import"];
+  m -> sdk; p5 -> sdk;
+}

@@ -1,0 +1,33 @@
+digraph G {
+  rankdir=TB; newrank=true; nodesep=0.35; ranksep=0.35;
+  node [shape=box style="rounded,filled" fontname="Helvetica" fontsize=11 fillcolor=white];
+  edge [fontname="Helvetica" fontsize=9 color="#444444"];
+  subgraph cluster1 {label="① User interface (browser)"; style=filled; fillcolor="#dbe8fb"; fontname="Helvetica-Bold";
+    ui [label="personality_signature.html\n+ PersonalitySignature_spiral.jsx\n(React + Babel from CDN, no build)"]; }
+  subgraph cluster2 {label="② Local HTTP bridge"; style=filled; fillcolor="#dcefd9"; fontname="Helvetica-Bold";
+    br [label="gui_bridge_server.py\n127.0.0.1:8787 (Python standard library only)\n/draw-signature  /draw-sample  /estop  /go-home  /pen-down  /status  /tcp-info  /health"]; }
+  subgraph cluster3 {label="③ Automation scripts (scripts/, run directly, no colcon build)"; style=filled; fillcolor="#fdf0cf"; fontname="Helvetica-Bold";
+    seq [label="run_signature_sequence.py\nsequence orchestrator\nstops on the first failure"];
+    ltp [label="lower_to_paper.py\n★ engraving step\nsurface Z + hybrid position/force drawing" fillcolor="#ffe49a"];
+    drl [label="run_drl_motion.py / drl_motions.py\npen_up → pen_down → brush → grab\n(pick-and-place motions)"];
+    saf [label="emergency_stop.py / go_home.py\ntcp_info.py\n(stop · home · TCP check, called by bridge)"]; }
+  subgraph cluster4 {label="④ ROS 2 application pipeline (svg_drawing package)"; style=filled; fillcolor="#e6dcef"; fontname="Helvetica-Bold";
+    pipe [label="SVG → path pipeline\nsvg_parser → bezier_sampler → coordinate_mapper → trajectory_planner → robot_controller\n(mm → robot base frame, then Doosan motion calls)"]; }
+  subgraph cluster5 {label="⑤ Robot middleware / drivers"; style=filled; fillcolor="#f6d6d6"; fontname="Helvetica-Bold";
+    bu [label="m0609_rg2_bringup\nros2 launch ... mode:=real host:=<ip>"];
+    dsr [label="doosan-robot2 (vendor)\ndsr_bringup2 / dsr_controller2 / dsr_hardware2\ndsr_msgs2 / dsr_common2"];
+    orb [label="onrobot-ros2 (vendor)\nonrobot_rg_control / onrobot_rg_modbus_tcp"]; }
+  subgraph cluster6 {label="⑥ Hardware"; style=filled; fillcolor="#eeeeee"; fontname="Helvetica-Bold";
+    rob [label="Doosan M0609 controller\n(TCP socket, TCP/payload calibrated)"];
+    grp [label="OnRobot RG2 gripper\n(Modbus TCP)"]; }
+  ui -> br [label="fetch (POST /draw-signature ...)"];
+  br -> seq [label="subprocess.Popen"];
+  br -> saf [label="subprocess.run"];
+  seq -> ltp [label="draw step"];
+  seq -> drl [label="pen_up / pen_down / brush / grab"];
+  ltp -> pipe [label="import (same process)"];
+  drl -> dsr [label="same ROS 2 API"];
+  pipe -> dsr [label="ROS 2 services (movel / movesx ...)"];
+  bu -> dsr [label="configures"]; bu -> orb [label="configures"];
+  dsr -> rob [label="TCP socket"]; orb -> grp [label="Modbus TCP"];
+}
