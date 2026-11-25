@@ -1,118 +1,143 @@
-# SIGNATURE (성향 시그니처 로봇 드로잉 시스템)
-> **조 이름:** [E-1 - ROKEY]
-> **팀원:** [유용준_임진우_김태남_전형준_박성우]
+# Robotic Drawing System (SIGNATURE)
 
-## 1. 🎨 시스템 설계 및 플로우 차트
-프로젝트의 전체적인 구조와 소프트웨어 흐름도입니다.
+A Doosan M0609 collaborative arm engraves a personal pattern into an acrylic panel with a steel scriber, using hybrid position/force control. A user answers a short personality survey in a web page, the page generates a pattern as SVG, and the robot picks up the pen, engraves the pattern, returns the pen, brushes off the dust, and hands over the finished panel.
 
-### 1-1. 시스템 설계도 (System Architecture)
-<p align="center">
-  <img src="./images/system_design.png" alt="시스템 설계도 이미지" width="720">
-</p>
+ROKEY Robotics Bootcamp team project (5 people), July 2026. Built and demonstrated on hardware.
 
-* *설명: 6개 레이어(① 브라우저 UI → ② 로컬 HTTP 브릿지 → ③ 자동화 스크립트 → ④ ROS2
-  응용 파이프라인 → ⑤ 로봇 미들웨어/드라이버 → ⑥ 실물 타겟)로 구성됩니다. GUI는
-  `fetch(POST)`로 브릿지 서버를 호출하고, 서버는 `subprocess`로 스크립트를 실행합니다.
-  `svg_parser → bezier_sampler → coordinate_mapper → trajectory_planner → robot_controller`
-  파이프라인이 SVG를 Base 좌표로 변환해 Doosan 드라이버(TCP 소켓)와 OnRobot 그리퍼
-  (Modbus TCP)를 각각 호출합니다.*
+> Korean version of this README: [README.ko.md](README.ko.md). The detailed developer guide ([DEVELOPMENT.md](DEVELOPMENT.md)) and user manual ([사용설명서.md](사용설명서.md)) are in Korean.
 
-### 1-2. 플로우 차트 (Flow Chart)
-<p align="center">
-  <img src="./images/flow_chart.png" alt="플로우 차트 이미지" width="800">
-</p>
+## Team
 
-* *설명: 실제 실행 시 데이터 흐름 순서(①~⑧)를 번호로 표시한 런타임 구조도입니다.
-  ① 브라우저 클릭→POST ② 브릿지 서버가 job 실행 시작 ③,⑤,⑥,⑦ pen_up→pen_down→
-  brush→grab을 순서대로 개별 실행 ④ draw 단계(내부적으로 svg_parser부터
-  robot_controller까지 순차 호출) ⑧ 브라우저가 `/status`를 폴링해 진행률 확인.*
+| Member | Role |
+|---|---|
+| Yongjun Yu | Team lead; 3D modeling and printing of fixtures (pen gripper, panel holder, tool holder) |
+| **Gene Woo Lim** | Position/force control, safety checks (TCP check, contact detection), drawing sequence, gripper interlock and grasp logic, SVG-to-path conversion, pattern algorithm, GUI–robot bridge |
+| Hyunjun Jeon | Scribing algorithm, code integration, system architecture |
+| Taenam Kim | Motion improvements (output size, closing closed shapes), documentation |
+| Seongwoo Park | Product planning |
 
-**애플리케이션 레벨 요약**: 설문(22문항) → 성향 벡터·MBTI 유형 계산 → 문양(획 좌표) 생성
-→ 로봇용 JSON 전송 → 서버에서 SVG로 재조립 → 펜 집기 → 아크릴에 드로잉(힘제어) → 펜 반납
-→ 붓질 → 완성판 전달 순으로 진행됩니다. 각 단계는 실패 시 안전하게 중단되고 원위치로
-복귀합니다.
+## System overview
+
+<p align="center"><img src="./images/system_design.png" width="720" alt="System architecture"></p>
 
 ```
-설문 응답 → 성향 분석(MBTI+벡터) → 문양 생성 → JSON 전송
-   → SVG 변환 → pen_up → 그리기 → pen_down → brush → grab → 완료
+Browser GUI (personality_signature.html)
+   │  survey → pattern → [Draw with robot]
+   │  HTTP POST to 127.0.0.1:8787
+   ▼
+scripts/gui_bridge_server.py        local HTTP bridge (standard library only)
+   ▼
+scripts/run_signature_sequence.py   runs each step, stops on the first failure
+   ├─ pen_up    pick up the pen (grasp checked over Modbus)
+   ├─ draw      lower_to_paper.py: engrave the SVG
+   ├─ pen_down  return the pen
+   ├─ brush     brush off the dust (grasp checked over Modbus)
+   └─ grab      pick up the finished panel and hand it over
 ```
 
----
+Drawing pipeline (`svg_drawing/`):
 
-## 2. 🖥️ 운영체제 환경 (OS Environment)
-이 프로젝트는 다음 환경에서 개발하였습니다.
+```
+svg_parser → bezier_sampler → coordinate_mapper → trajectory_planner → robot_controller
+SVG paths    2 mm sampling,    SVG units → mm      stroke order to       motion with
+             RDP simplify      on the panel        reduce travel         force control
+```
 
-* **OS:** Ubuntu 22.04 LTS
-* **ROS Version:** ROS2 Humble
-* **Language:** Python 3.10 (로봇 제어), JavaScript/JSX (GUI, 브라우저 내 Babel 실시간 변환)
-* **IDE:** VS Code
+<p align="center"><img src="./images/flow_chart.png" width="800" alt="Runtime flow"></p>
 
----
+## Main engineering problems
 
-## 3. 🛠️ 사용 장비 목록 (Hardware List)
-프로젝트에 사용된 주요 하드웨어 장비입니다.
+Values below are the defaults in the code (`scripts/lower_to_paper.py`, `svg_drawing/robot_controller.py`).
 
-| 장비명 (Model) | 수량 | 비고 |
-|:---:|:---:|:---|
-| Doosan Robotics M0609 (협동로봇) | 1 | 6축, 아크릴 드로잉용 |
-| OnRobot RG2 (그리퍼) | 1 | 펜/붓 파지, Modbus TCP로 실제 파지 여부 검증 |
-| 스크래치 펜(철필) | 1 | TCP 오프셋 약 289mm |
-| 붓 | 1 | 드로잉 후 아크릴 표면 먼지 제거용 |
-| 아크릴판 | 소모 | 드로잉 대상(기본 112.5mm 정사각) |
-| 제어 PC | 1 | ROS2 Humble 구동, 로봇/그리퍼와 통신 |
+### 1. Even line depth: hybrid position/force control
+With position control only, line depth changed across the panel, because the surface height and the set height were off by fractions of a millimeter. X and Y use position control (stiffness 3000) for the shape; Z uses force control (stiffness 10) to follow the surface.
 
----
+Tests showed the left side of the panel needed more force than the right. The target force changes linearly across the panel, from 5.0 N on the right (Base −Y) to 7.0 N on the left (Base +Y). Compliance mode is turned on once per stroke, and after that only the target force is updated. Re-setting compliance mode in the middle of a motion made the robot stop without an error, so this was changed.
 
-## 4. 📦 의존성 (Dependencies)
-프로젝트 실행에 필요한 라이브러리입니다.
+### 2. Faint stroke starts: force ramp wait
+The arm started moving before the force reached its target, so the start of each stroke was faint. After force control turns on, the robot waits `force_ramp_wait_s` (2.0 s) before drawing.
 
-* Python >= 3.10
-* ROS2 Humble + Doosan 드라이버(`dsr_bringup2`, `dsr_msgs2`, `m0609_rg2_bringup` 등, 별도 설치)
-* `svgelements` — SVG 파싱
-* `numpy`
-* `pymodbus` — OnRobot RG2 그리퍼 Modbus TCP 통신(파지 검증)
-* React 18 / Babel standalone — CDN으로 로드(별도 설치·빌드 불필요, 인터넷 연결만 필요)
+### 3. Slow curves: RDP and angle-based blending
+Curves are many short segments, and the arm slowed down at each point. Points are simplified with RDP (0.15 mm tolerance). The blend radius is set from the turn angle: corners of 25° or more keep 0.8 mm so shapes stay sharp; gentle curves use up to 4.0 mm. Slow zones of 6 mm (34% speed) at the start and end of each stroke are measured by distance, with an inserted point at the exact boundary.
+
+### 4. Closed shapes and stroke ends
+Start and end points matched in the math, but the arm missed by about 1 mm, so closed shapes did not close. Each stroke is extended along its last direction (`draw_extend_frac`, 1.5% in `lower_to_paper.py`).
+
+### 5. Surface height: touch-off
+The `/touch_off` service lowers the pen slowly until contact and stores the real surface Z. It stops after a max travel or timeout, and ignores contact in the first part of the travel so the pen's own weight does not trigger it.
+
+### 6. Safety checks
+| Check | How |
+|---|---|
+| Wrong TCP | Before any motion, `tcp_check.py` reads the active TCP. If the offset is outside 289 mm ± 20 mm (for example reset to the flange after a controller reboot), the run stops. |
+| No panel / no contact | On the first stroke, the Z force is sampled and the median is compared to `no_contact_force_n` (4.0 N). With no contact, force control is released, the arm moves to a safe pose and the run ends with `NoContactError`. |
+| Pen or brush not grasped | A closed gripper command does not prove an object was grasped. The gripper's Modbus register 275 is read: about 5 empty, about 200 with the pen, about 254 with the brush; below 80 means "not grasped". The gripper opens, the arm goes to its ready pose, and the GUI shows a restart button. |
+| Gripper signal order | Digital outputs are switched in a fixed order (DO1/3/4 off, then DO2 on). The reverse order briefly triggered the wrong gripper rule. |
+
+## Hardware
+
+| Item | Notes |
+|---|---|
+| Doosan Robotics M0609 | 6-axis collaborative arm |
+| OnRobot RG2 | Gripper; digital outputs for commands, Modbus TCP for grasp check |
+| Steel scriber in a 3D-printed holder | TCP offset about 289 mm |
+| Brush | Removes dust after engraving |
+| Acrylic panel | Default 112.5 mm square |
+
+## Software
+
+- Ubuntu 22.04, ROS 2 Humble, Python 3.10
+- Doosan ROS 2 driver (`dsr_bringup2`, `dsr_msgs2`), installed separately
+- Python: `svgelements`, `numpy`, `pymodbus`
+- GUI: React 18 and Babel from a CDN, no build step
+
+## Setup
 
 ```bash
+# ROS 2 Humble and the Doosan driver workspace must already be set up
+cd ~/ws_cobot_pjt/ws_dsr/src
+git clone <this repository> svg_drawing
 pip install svgelements numpy pymodbus
+cd ~/ws_cobot_pjt/ws_dsr
+colcon build --packages-select svg_drawing
+source install/setup.bash
 ```
 
----
+## Usage
 
-## 5. ▶️ 실행 순서 (Usage Guide)
-프로젝트를 실행하기 위한 순서입니다. 터미널 명령어를 순서대로 입력해 주세요.
-
-### Step 1. 로봇 초기화 — 로봇의 전원을 켜고 통신을 연결합니다.
 ```bash
+# Terminal A: robot driver (try mode:=virtual first on a new setup)
 source /opt/ros/humble/setup.bash
 source ~/ws_cobot_pjt/ws_dsr/install/setup.bash
 ros2 launch m0609_rg2_bringup bringup.launch.py mode:=real host:=192.168.1.100
-```
-> 처음 켜는 컴퓨터/로봇 조합이면 `mode:=virtual`(시뮬)로 먼저 전체 흐름을 검증하세요.
 
-### Step 2. 브릿지 서버 실행 — GUI와 로봇을 이어주는 로컬 서버를 켭니다.
-```bash
-source /opt/ros/humble/setup.bash
-source ~/ws_cobot_pjt/ws_dsr/install/setup.bash
+# Terminal B: GUI bridge server
 cd ~/ws_cobot_pjt/ws_dsr/src/svg_drawing/scripts
 python3 gui_bridge_server.py --port 8787
+
+# Then open personality_signature.html in a browser on the same computer.
 ```
 
-### Step 3. GUI 실행 — 브라우저에서 `personality_signature.html`을 엽니다.
+Draw one SVG from the terminal without the GUI:
+
 ```bash
-# 더블클릭하거나 브라우저 주소창에 파일 경로를 입력해서 열면 됩니다.
-# (React/Babel을 CDN에서 불러오므로 최초 실행 시 인터넷 연결 필요, 별도 설치 불필요)
-```
-설문을 완료하면 결과 화면에서 **[로봇으로 그리기]** 버튼으로 전체 시퀀스(펜집기 →
-드로잉 → 펜반납 → 붓질 → 완성판 전달)를 실행할 수 있습니다.
-
-### (선택) 터미널에서 SVG 한 장만 바로 그리기
-```bash
-python3 ~/ws_cobot_pjt/ws_dsr/src/svg_drawing/scripts/lower_to_paper.py --svg samples/merkaba.svg
+python3 scripts/lower_to_paper.py --svg samples/merkaba.svg
 ```
 
----
+## Repository structure
 
-## 6. 📁 프로젝트 구조 & 상세 사양
-GUI 구성/기능, 그리기 파이프라인 파라미터, 안전장치, FAQ 등 개발 상세 문서는
-[`DEVELOPMENT.md`](DEVELOPMENT.md)를 참고하세요.
+```
+svg_drawing/        core package: parser, sampler, mapper, planner, robot controller
+scripts/            standalone scripts: drawing, motions, sequence, GUI bridge, safety checks
+config/             drawing parameters
+launch/             ROS 2 launch file (service-based path, optional)
+samples/            test SVG patterns
+personality_signature.html, PersonalitySignature_spiral.jsx   survey and pattern GUI
+CHANGELOG_*.md      problem / cause / fix notes (Korean)
+```
+
+## Safety notes
+
+- Stay at the robot while it draws; use the GUI stop button or the physical E-stop if anything looks wrong.
+- After a controller restart, check the TCP and run at low speed first.
+- The bridge server listens on 127.0.0.1 only. Do not expose it to a network.
